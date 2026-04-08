@@ -143,7 +143,7 @@ def create_unified_chart(used, total, is_open, room_name, density):
         textinfo='none',
         sort=False,
         direction='clockwise',
-        rotation=90
+        rotation=0
     ))
     
     fig.update_layout(
