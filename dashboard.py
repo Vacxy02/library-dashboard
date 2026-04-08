@@ -3,7 +3,13 @@ import pandas as pd
 import os
 import requests
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+# --- [추가] 한국 시간(KST) 설정을 위한 함수 ---
+def get_now_kst():
+    # UTC 기준 시간에 9시간을 더해 한국 시간 생성
+    kst = timezone(timedelta(hours=9))
+    return datetime.now(kst)
 
 # 1. 페이지 기본 설정
 st.set_page_config(page_title="강남자리: 실시간 AI 리포트", layout="wide", page_icon="🧠")
@@ -29,7 +35,7 @@ COMMENTS_FILE = "comments.csv"
 
 # 4. 운영 시간 판단 함수
 def check_room_open(lib_name, room_name):
-    now = datetime.now()
+    now = get_now_kst() # KST 적용
     weekday = now.weekday()
     hour = now.hour
     is_weekend = weekday >= 5
@@ -69,7 +75,7 @@ def check_room_open(lib_name, room_name):
 # 5. 실시간 API 호출 및 데이터 저장
 def get_realtime_data():
     url = "http://apis.data.go.kr/B551982/plr_v2/rlt_rdrm_info_v2"
-    now = datetime.now()
+    now = get_now_kst() # KST 적용
     try:
         res = requests.get(url, params={'serviceKey': API_KEY, '_type': 'json', 'pageNo': '1', 'numOfRows': '300'}, timeout=8).json()
         items = res.get('body', {}).get('item', [])
@@ -90,7 +96,6 @@ def get_realtime_data():
                 })
         rt_df = pd.DataFrame(rows)
         
-        # 파일 저장 (정각/30분 기준)
         if not rt_df.empty and (0 <= now.minute <= 5 or 30 <= now.minute <= 35):
             log_time = now.replace(minute=0 if now.minute < 15 else 30, second=0, microsecond=0).strftime('%Y-%m-%d %H:%M:%S')
             save_df = rt_df.copy()
@@ -126,19 +131,19 @@ def predict_dynamic(history_df, lib_name, room_name, current_used, predict_min):
     pred_count = max(0, int(round(current_used + delta)))
     return pred_count, round(delta, 1)
 
-# 7. 그래프 생성 함수 (12시 방향 고정)
+# 7. 그래프 생성 함수
 def create_unified_chart(used, total, is_open, room_name, density):
     chart_color = '#00CC96' if is_open else '#555555'
     if is_open and density >= 80: chart_color = '#EF553B'
     
     fig = go.Figure(go.Pie(
-        values=[used, max(0.1, total - used)], # 0이 되면 그래프가 안 그려지므로 최소값 설정
+        values=[used, max(0.1, total - used)],
         hole=.75,
         marker=dict(colors=[chart_color, '#E5ECF6']),
         textinfo='none',
-        sort=False,            # 데이터 순서 고정
-        direction='clockwise', # 시계 방향
-        rotation=0            # 12시 방향 시작 (Plotly 기준 90도 = 상단)
+        sort=False,
+        direction='clockwise',
+        rotation=90
     ))
     
     fig.update_layout(
@@ -166,11 +171,13 @@ if realtime_df is not None and not realtime_df.empty:
     latest_dt_str = current_lib_df['수집시간'].iloc[0]
     
     st.title(f"🚀 {selected_lib} AI 리포트")
-    st.markdown(f"### 📍 실시간 좌석 현황 <small style='color:gray;'>({latest_dt_str} 기준)</small>", unsafe_allow_html=True)
+    st.markdown(f"### 📍 실시간 좌석 현황 <small style='color:gray;'>({latest_dt_str} 기준 / KST)</small>", unsafe_allow_html=True)
 
     st.markdown('<p class="slider-title">🔮 도착 예정 시점 선택</p>', unsafe_allow_html=True)
     predict_min = st.select_slider("예측 시간", options=[30, 60, 90, 120, 150, 180], value=30, label_visibility="collapsed")
-    future_time_str = (datetime.now() + timedelta(minutes=predict_min)).strftime('%H:%M')
+    
+    # 예측 시각도 한국 시간 기준 계산
+    future_time_str = (get_now_kst() + timedelta(minutes=predict_min)).strftime('%H:%M')
 
     cols = st.columns(len(current_lib_df))
     for i, (idx, row) in enumerate(current_lib_df.iterrows()):
@@ -200,7 +207,7 @@ if realtime_df is not None and not realtime_df.empty:
     st.divider()
     if history_df is not None:
         st.subheader(f"📅 7일 전 동일 시점 패턴")
-        past_7_days = datetime.now().date() - timedelta(days=7)
+        past_7_days = get_now_kst().date() - timedelta(days=7)
         history_7d_df = history_df[(history_df['도서관명'] == selected_lib) & (history_df['날짜'] == past_7_days)]
         
         if not history_7d_df.empty:
@@ -227,7 +234,7 @@ if realtime_df is not None and not realtime_df.empty:
         nick = c1.text_input("닉네임", placeholder="익명")
         text = c2.text_area("내용", placeholder="오늘 도서관 분위기는 어떤가요?")
         if st.form_submit_button("등록") and text:
-            new_data = pd.DataFrame({'도서관명': [selected_lib], '날짜': [datetime.now().strftime('%Y-%m-%d %H:%M')], '닉네임': [nick if nick else "익명"], '내용': [text]})
+            new_data = pd.DataFrame({'도서관명': [selected_lib], '날짜': [get_now_kst().strftime('%Y-%m-%d %H:%M')], '닉네임': [nick if nick else "익명"], '내용': [text]})
             pd.concat([comm_df, new_data], ignore_index=True).to_csv(COMMENTS_FILE, index=False, encoding='utf-8-sig')
             st.rerun()
 
@@ -236,4 +243,4 @@ if realtime_df is not None and not realtime_df.empty:
             st.write(f"**{r['닉네임']}** | <small style='color: gray;'>{r['날짜']}</small>", unsafe_allow_html=True)
             st.write(r['내용'])
 else:
-    st.error("📡 실시간 데이터를 불러올 수 없습니다.")
+    st.error("📡 실시간 데이터를 불러올 수 없습니다. API 키를 확인해주세요.")
